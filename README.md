@@ -1,14 +1,15 @@
 # OtherTools
 
-一些独立的小工具集合。目前包含 Windows 桌面取色工具 `colortool.py`。
+独立小工具集合。目前包含 Windows 图片色彩分析工具 `colortool.py`。
 
 ## 功能
 
-- 输入 RGB 数值并查看 HSL、HSV 和可复制色值。
-- 点击按钮后从屏幕任意位置吸取颜色。
-- 支持复制 Hex、`rgb(...)`、0-1 归一化 RGB。
-- 保留最近 5 个颜色记录，点击色块可快速切换。
-- 输入非法 RGB 时会显示错误提示。
+- 导入或粘贴图片，自动提取图片色彩结构。
+- 按绘画语义区分主色调、辅色调和点缀色。
+- 主色调和辅色调会归并相近颜色，减少重复色。
+- 点缀色只保留小面积且视觉跳出的颜色，允许没有点缀色。
+- 显示色块、Hex 色值、占比条和明度结构。
+- 支持复制当前色值和添加采样色板。
 
 ## 运行环境
 
@@ -29,10 +30,12 @@ python colortool.py
 
 如果启动时提示缺少依赖，请先运行安装命令。
 
-## 用 GitHub Desktop 管理
+## 打包建议
 
-1. 打开 GitHub Desktop。
-2. 选择 `File` -> `Add local repository...`。
-3. 选择本目录：`D:\Asset\OtherTools`。
-4. 如果提示尚未创建 Git 仓库，选择创建仓库。
-5. 检查变更后提交，再发布到 GitHub。
+建议在干净虚拟环境中只安装 `requirements.txt` 和打包工具，避免把无关依赖打入 exe。
+
+PyInstaller 示例：
+
+```powershell
+pyinstaller --onefile --windowed --name colortool colortool.py
+```
