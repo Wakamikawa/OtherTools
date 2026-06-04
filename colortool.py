@@ -10,7 +10,7 @@ from tkinter import filedialog, messagebox, ttk
 
 
 try:
-    from PIL import Image, ImageGrab, ImageTk
+    from PIL import Image, ImageDraw, ImageGrab, ImageTk
 except ImportError as exc:
     missing_package = exc.name or "依赖包"
     install_command = f'"{sys.executable}" -m pip install -r requirements.txt'
@@ -43,11 +43,6 @@ class ColorInfo:
         return f"{self.r / 255:.4f}, {self.g / 255:.4f}, {self.b / 255:.4f}"
 
     @property
-    def hsl(self):
-        h, l, s = colorsys.rgb_to_hls(self.r / 255, self.g / 255, self.b / 255)
-        return h * 360, s * 100, l * 100
-
-    @property
     def hsv(self):
         h, s, v = colorsys.rgb_to_hsv(self.r / 255, self.g / 255, self.b / 255)
         return h * 360, s * 100, v * 100
@@ -78,6 +73,35 @@ COPY_FORMATS = {
     "HSV": lambda color: f"HSV {color.hsv[0]:.0f} deg / {color.hsv[1]:.1f}% / {color.hsv[2]:.1f}%",
     "RGB 0-1": lambda color: color.normalized_rgb_text,
 }
+
+
+APP_TITLE = "Chromie"
+BASE_DIR = Path(__file__).resolve().parent
+CHROMIE_ASSET_PATH = BASE_DIR / "assets" / "chromie.png"
+FONT_UI = ("Microsoft YaHei UI", 10, "bold")
+FONT_TITLE = ("Microsoft YaHei UI", 17, "bold")
+FONT_SUBTITLE = ("Microsoft YaHei UI", 11, "bold")
+FONT_MONO = ("Cascadia Mono", 9, "bold")
+FONT_MONO_SMALL = ("Cascadia Mono", 8, "bold")
+
+THEME = {
+    "window": "#E6E0D7",
+    "panel": "#F3EEE7",
+    "panel_alt": "#E1D8CE",
+    "panel_shadow": "#D2C7BB",
+    "line": "#A99B8D",
+    "soft_line": "#E9E2DA",
+    "text": "#342F2A",
+    "muted": "#7D7166",
+    "accent": "#8A5E3F",
+    "accent_dark": "#5A3B29",
+    "danger": "#B86468",
+    "chart": "#272625",
+    "chart_line": "#7D746C",
+    "swatch_border": "#6F655C",
+    "pet_key": "#FF00FF",
+}
+
 
 def enable_dpi_awareness():
     try:
@@ -524,7 +548,7 @@ def select_auxiliary_families(families, main_families, count=6):
     )
 
 
-def extract_color_structure(colors, image=None, bucket_size=16, main_count=6, auxiliary_count=6, accent_count=3):
+def extract_color_structure(colors, bucket_size=16, main_count=6, auxiliary_count=6, accent_count=3):
     if not colors:
         return [], [], []
 
@@ -587,35 +611,412 @@ def value_distribution(colors):
     return bins
 
 
+def make_rounded_image(width, height, radius, fill, bg, outline=None, shadow=None, scale=3):
+    width = max(2, int(width))
+    height = max(2, int(height))
+    canvas = Image.new("RGB", (width * scale, height * scale), bg)
+    draw = ImageDraw.Draw(canvas)
+    rect = (scale, scale, (width - 1) * scale, (height - 1) * scale)
+    if shadow:
+        shadow_rect = (scale * 2, scale * 4, width * scale, height * scale)
+        draw.rounded_rectangle(shadow_rect, radius=radius * scale, fill=shadow)
+    draw.rounded_rectangle(rect, radius=radius * scale, fill=fill, outline=outline, width=scale if outline else 1)
+    return canvas.resize((width, height), Image.Resampling.LANCZOS)
+
+
+def make_transparent_pill(width, height, radius, fill, shadow=None, scale=3):
+    width = max(2, int(width))
+    height = max(2, int(height))
+    canvas = Image.new("RGBA", (width * scale, height * scale), (0, 0, 0, 0))
+    draw = ImageDraw.Draw(canvas)
+    if shadow:
+        shadow_rect = (scale * 2, scale * 4, width * scale, height * scale)
+        draw.rounded_rectangle(shadow_rect, radius=radius * scale, fill=shadow)
+    rect = (scale, scale, (width - 1) * scale, (height - 1) * scale)
+    draw.rounded_rectangle(rect, radius=radius * scale, fill=fill)
+    return canvas.resize((width, height), Image.Resampling.LANCZOS)
+
+
+def round_image_corners(image, radius):
+    rounded = image.convert("RGBA")
+    mask = Image.new("L", rounded.size, 0)
+    draw = ImageDraw.Draw(mask)
+    draw.rounded_rectangle((0, 0, rounded.width, rounded.height), radius=radius, fill=255)
+    rounded.putalpha(mask)
+    return rounded
+
+
+def harden_alpha(image, threshold=96):
+    image = image.convert("RGBA")
+    alpha = image.getchannel("A").point(lambda value: 255 if value >= threshold else 0)
+    image.putalpha(alpha)
+    return image
+
+
+def load_chromie_image(size, hard_alpha=False):
+    image = Image.open(CHROMIE_ASSET_PATH).convert("RGBA")
+    bbox = image.getbbox()
+    if bbox:
+        image = image.crop(bbox)
+    image.thumbnail((size, size), Image.Resampling.LANCZOS)
+    canvas = Image.new("RGBA", (size, size), (0, 0, 0, 0))
+    x = (size - image.width) // 2
+    y = (size - image.height) // 2
+    canvas.alpha_composite(image, (x, y))
+    if hard_alpha:
+        canvas = harden_alpha(canvas)
+    return canvas
+
+
+class RoundedPanel(tk.Canvas):
+    def __init__(self, parent, title, min_height=92, fixed_height=False):
+        super().__init__(parent, bg=THEME["window"], highlightthickness=0, height=min_height)
+        self.title = title
+        self.min_height = min_height
+        self.fixed_height = fixed_height
+        self.pad_x = 16
+        self.title_h = 34 if title else 14
+        self.bottom_pad = 16
+        self.bg_image = None
+        self.body = ttk.Frame(self, style="Panel.TFrame")
+        self.body_window = self.create_window(self.pad_x, self.title_h, window=self.body, anchor="nw")
+        self.bind("<Configure>", self.redraw)
+        self.body.bind("<Configure>", self.sync_height)
+
+    def sync_height(self, _event=None):
+        if self.fixed_height:
+            return
+        desired = max(self.min_height, self.title_h + self.body.winfo_reqheight() + self.bottom_pad)
+        if abs(self.winfo_height() - desired) > 2:
+            self.configure(height=desired)
+
+    def redraw(self, _event=None):
+        self.delete("surface")
+        width = max(1, self.winfo_width())
+        height = max(self.min_height, self.winfo_height())
+        image = make_rounded_image(
+            width,
+            height,
+            26,
+            THEME["panel"],
+            THEME["window"],
+            outline=THEME["soft_line"],
+            shadow=THEME["panel_shadow"],
+        )
+        self.bg_image = ImageTk.PhotoImage(image)
+        self.create_image(0, 0, image=self.bg_image, anchor="nw", tags=("surface",))
+        if self.title:
+            self.create_text(
+                self.pad_x,
+                20,
+                anchor="w",
+                text=self.title,
+                fill=THEME["accent_dark"],
+                font=FONT_SUBTITLE,
+                tags=("surface",),
+            )
+        self.tag_lower("surface", self.body_window)
+        self.itemconfigure(self.body_window, width=max(1, width - self.pad_x * 2))
+
+
+class RoundedButton(tk.Canvas):
+    def __init__(self, parent, text, command, variant="primary", min_width=92):
+        bg = THEME["window"] if variant == "pet" else THEME["panel"]
+        super().__init__(
+            parent,
+            width=min_width,
+            height=36,
+            bg=bg,
+            highlightthickness=0,
+            cursor="hand2",
+        )
+        self.text = text
+        self.command = command
+        self.variant = variant
+        self.hovered = False
+        self.bg_image = None
+        self.bind("<Configure>", lambda _event: self.redraw())
+        self.bind("<Enter>", self.enter)
+        self.bind("<Leave>", self.leave)
+        self.bind("<Button-1>", lambda _event: self.command())
+        self.redraw()
+
+    def colors(self):
+        if self.variant == "primary":
+            return (THEME["accent_dark"] if self.hovered else THEME["accent"], "#FFFFFF")
+        if self.variant == "pet":
+            return ("#BFAE9E" if self.hovered else "#CEC0B1", THEME["accent_dark"])
+        return ("#D0C5B9" if self.hovered else THEME["panel_alt"], THEME["accent_dark"])
+
+    def enter(self, _event):
+        self.hovered = True
+        self.redraw()
+
+    def leave(self, _event):
+        self.hovered = False
+        self.redraw()
+
+    def redraw(self):
+        self.delete("all")
+        width = max(1, self.winfo_width())
+        fill, text_color = self.colors()
+        bg = THEME["window"] if self.variant == "pet" else THEME["panel"]
+        image = make_rounded_image(width, 36, 17, fill, bg, shadow="#D6CCC1")
+        self.bg_image = ImageTk.PhotoImage(image)
+        self.create_image(0, 0, image=self.bg_image, anchor="nw")
+        self.create_text(width / 2, 18, text=self.text, fill=text_color, font=FONT_UI)
+
+
+class ChromiePet:
+    def __init__(self, app):
+        self.app = app
+        self.root = app.root
+        self.size = 104
+        self.visible_edge = 34
+        self.drag_start = None
+        self.did_drag = False
+        self.is_dragging = False
+        self.docked_side = "right"
+        self.hide_after_id = None
+        self.animation_after_id = None
+        self.avatar_image = None
+
+        self.window = tk.Toplevel(self.root)
+        self.window.withdraw()
+        self.window.overrideredirect(True)
+        self.window.attributes("-topmost", True)
+        self.window.attributes("-alpha", 0.96)
+        try:
+            self.window.attributes("-transparentcolor", THEME["pet_key"])
+        except tk.TclError:
+            pass
+
+        self.canvas = tk.Canvas(
+            self.window,
+            width=self.size,
+            height=self.size,
+            bg=THEME["pet_key"],
+            highlightthickness=0,
+            cursor="hand2",
+        )
+        self.canvas.place(x=0, y=0, width=self.size, height=self.size)
+        self.draw()
+
+        for widget in (self.window, self.canvas):
+            widget.bind("<ButtonPress-1>", self.start_drag)
+            widget.bind("<B1-Motion>", self.drag)
+            widget.bind("<ButtonRelease-1>", self.release_drag)
+            widget.bind("<Enter>", self.reveal)
+            widget.bind("<Leave>", self.hide_edge_later)
+
+    def draw(self):
+        c = self.canvas
+        c.delete("all")
+        self.avatar_image = ImageTk.PhotoImage(load_chromie_image(self.size, hard_alpha=True))
+        c.create_image(self.size / 2, self.size / 2, image=self.avatar_image)
+
+    def show(self):
+        self.cancel_hide_timer()
+        self.cancel_animation()
+        self.window.deiconify()
+        self.snap_to_nearest_edge(animate=False)
+
+    def hide(self):
+        self.cancel_hide_timer()
+        self.cancel_animation()
+        self.window.withdraw()
+
+    def start_drag(self, event):
+        self.cancel_hide_timer()
+        self.cancel_animation()
+        self.is_dragging = True
+        self.drag_start = (event.x_root, event.y_root, self.window.winfo_x(), self.window.winfo_y())
+        self.did_drag = False
+
+    def drag(self, event):
+        if not self.drag_start:
+            return
+        start_x, start_y, win_x, win_y = self.drag_start
+        dx = event.x_root - start_x
+        dy = event.y_root - start_y
+        if abs(dx) + abs(dy) > 4:
+            self.did_drag = True
+        self.window.geometry(f"{self.size}x{self.size}+{win_x + dx}+{win_y + dy}")
+
+    def release_drag(self, _event):
+        if self.did_drag:
+            self.snap_to_nearest_edge(animate=True)
+            self.window.after(240, self.finish_drag)
+        else:
+            self.app.show_main_panel()
+            self.is_dragging = False
+        self.drag_start = None
+
+    def finish_drag(self):
+        self.is_dragging = False
+
+    def snap_to_nearest_edge(self, animate=True):
+        screen_w, screen_h = self.screen_bounds()
+        x = self.window.winfo_x()
+        y = max(0, min(self.window.winfo_y(), screen_h - self.size))
+        distances = {
+            "left": abs(x),
+            "right": abs(screen_w - (x + self.size)),
+        }
+        self.docked_side = min(distances, key=distances.get)
+        self.dock(y, animate=animate)
+
+    def screen_bounds(self):
+        return self.window.winfo_screenwidth(), self.window.winfo_screenheight()
+
+    def dock(self, y=None, animate=True):
+        screen_w, screen_h = self.screen_bounds()
+        if y is None:
+            y = self.window.winfo_y()
+        y = max(0, min(y, screen_h - self.size))
+        if self.docked_side == "left":
+            x = 0
+            width = self.visible_edge
+            height = self.size
+            canvas_x = -(self.size - self.visible_edge)
+        else:
+            x = screen_w - self.visible_edge
+            width = self.visible_edge
+            height = self.size
+            canvas_x = 0
+        if animate:
+            self.animate_to(width, height, x, y, canvas_x)
+        else:
+            self.apply_pet_geometry(width, height, x, y, canvas_x)
+
+    def reveal(self, _event=None):
+        if self.is_dragging:
+            return
+        self.cancel_hide_timer()
+        screen_w, screen_h = self.screen_bounds()
+        y = max(0, min(self.window.winfo_y(), screen_h - self.size))
+        if self.docked_side == "left":
+            x = 0
+        else:
+            x = screen_w - self.size
+        self.animate_to(self.size, self.size, x, y, 0)
+
+    def hide_edge_later(self, _event=None):
+        if self.is_dragging:
+            return
+        self.cancel_hide_timer()
+        self.hide_after_id = self.window.after(450, self.hide_if_pointer_outside)
+
+    def cancel_hide_timer(self):
+        if self.hide_after_id is None:
+            return
+        try:
+            self.window.after_cancel(self.hide_after_id)
+        except tk.TclError:
+            pass
+        self.hide_after_id = None
+
+    def hide_if_pointer_outside(self):
+        if self.is_dragging:
+            return
+        self.hide_after_id = None
+        pointer_x = self.window.winfo_pointerx()
+        pointer_y = self.window.winfo_pointery()
+        win_x = self.window.winfo_x()
+        win_y = self.window.winfo_y()
+        inside_x = win_x <= pointer_x < win_x + self.window.winfo_width()
+        inside_y = win_y <= pointer_y < win_y + self.window.winfo_height()
+        if not (inside_x and inside_y):
+            self.dock()
+
+    def cancel_animation(self):
+        if self.animation_after_id is None:
+            return
+        try:
+            self.window.after_cancel(self.animation_after_id)
+        except tk.TclError:
+            pass
+        self.animation_after_id = None
+
+    def apply_pet_geometry(self, width, height, x, y, canvas_x):
+        width = max(1, round(width))
+        height = max(1, round(height))
+        x = round(x)
+        y = round(y)
+        canvas_x = round(canvas_x)
+        self.canvas.place_configure(x=canvas_x, y=0)
+        self.window.geometry(f"{width}x{height}+{x}+{y}")
+
+    def smooth_progress(self, progress):
+        return progress * progress * (3 - 2 * progress)
+
+    def animate_to(self, target_width, target_height, target_x, target_y, target_canvas_x, duration=220):
+        self.cancel_animation()
+        start_width = self.window.winfo_width()
+        start_height = self.window.winfo_height()
+        start_x = self.window.winfo_x()
+        start_y = self.window.winfo_y()
+        start_canvas_x = self.canvas.winfo_x()
+        frames = max(1, round(duration / 16))
+
+        def step(index=0):
+            progress = min(1, index / frames)
+            eased = self.smooth_progress(progress)
+            width = start_width + (target_width - start_width) * eased
+            height = start_height + (target_height - start_height) * eased
+            x = start_x + (target_x - start_x) * eased
+            y = start_y + (target_y - start_y) * eased
+            canvas_x = start_canvas_x + (target_canvas_x - start_canvas_x) * eased
+            self.apply_pet_geometry(width, height, x, y, canvas_x)
+            if index < frames:
+                self.animation_after_id = self.window.after(16, lambda: step(index + 1))
+            else:
+                self.animation_after_id = None
+                self.apply_pet_geometry(target_width, target_height, target_x, target_y, target_canvas_x)
+
+        step()
+
+
 class RGBApp:
     def __init__(self, root):
         self.root = root
-        self.root.title("色彩分析助手")
-        self.root.geometry("560x760")
+        self.root.title(APP_TITLE)
+        self.root.geometry("560x720")
         self.root.minsize(500, 520)
+        self.root.configure(bg=THEME["window"])
         self.root.attributes("-topmost", True)
-        self.root.attributes("-alpha", 0.97)
+        self.root.attributes("-alpha", 1.0)
         self.root.protocol("WM_DELETE_WINDOW", self.close)
+        self.window_icon = None
+        self.header_avatar_image = None
+        self.header_bg_image = None
+        self.header_bg_width = None
+        self.header_button_image = None
+        self.header_button_hovered = False
+        self.configure_style()
+        self.set_window_icon()
 
         self.current_color = ColorInfo(0, 166, 218)
-        self.palette = []
         self.analysis_source = []
         self.dominant_palette = []
         self.auxiliary_palette = []
         self.accent_palette = []
         self.preview_image = None
+        self.analysis_bg_image = None
         self.preview_source_image = None
         self.preview_source_name = ""
+        self.status_is_error = False
+        self.pet = ChromiePet(self)
         self.copy_format = tk.StringVar(value="Hex")
         self.outer = ttk.Frame(root)
         self.outer.pack(fill=tk.BOTH, expand=True)
-        self.scroll_canvas = tk.Canvas(self.outer, highlightthickness=0)
+        self.scroll_canvas = tk.Canvas(self.outer, highlightthickness=0, bg=THEME["window"])
         self.scrollbar = ttk.Scrollbar(self.outer, orient=tk.VERTICAL, command=self.scroll_canvas.yview)
         self.scroll_canvas.configure(yscrollcommand=self.scrollbar.set)
         self.scrollbar.pack(side=tk.RIGHT, fill=tk.Y)
         self.scroll_canvas.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
 
-        self.frame = ttk.Frame(self.scroll_canvas, padding="14")
+        self.frame = ttk.Frame(self.scroll_canvas, padding="10")
         self.frame_window = self.scroll_canvas.create_window((0, 0), window=self.frame, anchor="nw")
         self.frame.bind("<Configure>", self.update_scroll_region)
         self.scroll_canvas.bind("<Configure>", self.resize_scroll_frame)
@@ -625,13 +1026,31 @@ class RGBApp:
 
         self.build_status_section()
         self.build_source_section()
-        self.build_palette_section()
-        self.build_preview_section()
-        self.build_color_structure_section()
-        self.build_analysis_section()
+        self.build_palette_section(self.frame)
+        self.build_preview_section(self.frame)
+        self.build_color_structure_section(self.frame)
+        self.build_analysis_section(self.frame)
 
         self.refresh_color_structure()
         self.update_current_display(self.current_color)
+
+    def configure_style(self):
+        style = ttk.Style(self.root)
+        try:
+            style.theme_use("clam")
+        except tk.TclError:
+            pass
+
+        style.configure(".", font=FONT_UI, background=THEME["window"], foreground=THEME["text"])
+        style.configure("TFrame", background=THEME["window"])
+        style.configure("Panel.TFrame", background=THEME["panel"])
+        style.configure("TLabel", background=THEME["window"], foreground=THEME["text"], font=FONT_UI)
+        style.configure("Panel.TLabel", background=THEME["panel"], foreground=THEME["text"], font=FONT_UI)
+        style.configure("TCombobox", fieldbackground="#FFFDF9", background=THEME["panel_alt"], foreground=THEME["text"], font=FONT_UI)
+
+    def set_window_icon(self):
+        self.window_icon = ImageTk.PhotoImage(load_chromie_image(64))
+        self.root.iconphoto(True, self.window_icon)
 
     def update_scroll_region(self, event=None):
         self.scroll_canvas.configure(scrollregion=self.scroll_canvas.bbox("all"))
@@ -644,89 +1063,152 @@ class RGBApp:
 
     def build_status_section(self):
         self.status_var = tk.StringVar(value="就绪")
-        self.status_label = ttk.Label(self.frame, textvariable=self.status_var, foreground="gray")
-        self.status_label.pack(anchor="w", pady=(0, 8))
+        header = tk.Canvas(self.frame, height=132, bg=THEME["window"], highlightthickness=0)
+        header.pack(fill=tk.X, pady=(0, 8))
+        header.bind("<Configure>", self.redraw_header)
+        self.header_canvas = header
+        self.header_avatar_image = ImageTk.PhotoImage(load_chromie_image(106))
+        header.tag_bind("header_button", "<Enter>", self.enter_header_button)
+        header.tag_bind("header_button", "<Leave>", self.leave_header_button)
+        header.tag_bind("header_button", "<Button-1>", lambda _event: self.hide_to_pet())
+        self.redraw_header()
+
+    def redraw_header(self, _event=None):
+        if not hasattr(self, "header_canvas"):
+            return
+        canvas = self.header_canvas
+        canvas.delete("header_art")
+        width = max(canvas.winfo_width(), 1)
+        panel_y = 26
+        panel_h = 92
+        if self.header_bg_image is None or self.header_bg_width != width:
+            header_bg = make_rounded_image(
+                width,
+                panel_h,
+                23,
+                THEME["panel"],
+                THEME["window"],
+                outline=THEME["soft_line"],
+                shadow=THEME["panel_shadow"],
+            )
+            self.header_bg_image = ImageTk.PhotoImage(header_bg)
+            self.header_bg_width = width
+        canvas.create_image(0, panel_y, image=self.header_bg_image, anchor="nw", tags=("header_art",))
+        canvas.create_image(72, 52, image=self.header_avatar_image, tags=("header_art",))
+        canvas.create_text(134, 54, text="Chromie", anchor="w", fill=THEME["text"], font=FONT_TITLE, tags=("header_art",))
+        status_color = THEME["danger"] if getattr(self, "status_is_error", False) else THEME["muted"]
+        status_text = self.status_var.get()
+        max_status_chars = max(8, round((width - 154) / 11))
+        if len(status_text) > max_status_chars:
+            status_text = status_text[: max_status_chars - 1] + "..."
+        canvas.create_text(134, 82, text=status_text, anchor="w", fill=status_color, font=FONT_SUBTITLE, tags=("header_art",))
+        button_fill = "#BFAE9E" if self.header_button_hovered else "#CEC0B1"
+        self.header_button_image = ImageTk.PhotoImage(
+            make_transparent_pill(84, 38, 18, button_fill, shadow=(172, 156, 139, 80))
+        )
+        canvas.create_image(72, 112, image=self.header_button_image, tags=("header_art", "header_button"))
+        canvas.create_text(72, 112, text="收纳", fill=THEME["accent_dark"], font=FONT_UI, tags=("header_art", "header_button"))
+
+    def enter_header_button(self, _event=None):
+        if self.header_button_hovered:
+            return
+        self.header_button_hovered = True
+        self.header_canvas.configure(cursor="hand2")
+        self.redraw_header()
+
+    def leave_header_button(self, _event=None):
+        if not self.header_button_hovered:
+            return
+        self.header_button_hovered = False
+        self.header_canvas.configure(cursor="")
+        self.redraw_header()
 
     def build_source_section(self):
-        source = ttk.LabelFrame(self.frame, text="图片")
-        source.pack(fill=tk.X, pady=(0, 10))
+        source = RoundedPanel(self.frame, "", min_height=70)
+        source.pack(fill=tk.X, pady=(0, 8))
 
-        row = ttk.Frame(source, padding=8)
+        row = ttk.Frame(source.body, style="Panel.TFrame", padding=(0, 2, 0, 2))
         row.pack(fill=tk.X)
-        ttk.Button(row, text="导入图片", command=self.open_image).pack(side=tk.LEFT, fill=tk.X, expand=True)
-        ttk.Button(row, text="粘贴图片", command=self.paste_from_clipboard).pack(side=tk.LEFT, fill=tk.X, expand=True, padx=(8, 0))
+        RoundedButton(row, text="导入图片", variant="primary", command=self.open_image, min_width=112).pack(side=tk.LEFT, fill=tk.X, expand=True)
+        RoundedButton(row, text="粘贴图片", variant="ghost", command=self.paste_from_clipboard, min_width=112).pack(side=tk.LEFT, fill=tk.X, expand=True, padx=(10, 0))
 
-    def build_palette_section(self):
-        palette_box = ttk.LabelFrame(self.frame, text="采样色板")
-        palette_box.pack(fill=tk.BOTH, expand=True, pady=(0, 10))
+    def build_palette_section(self, parent):
+        palette_box = RoundedPanel(parent, "采样色板", min_height=100, fixed_height=True)
+        palette_box.pack(fill=tk.X, pady=(0, 8))
 
-        toolbar = ttk.Frame(palette_box, padding=(8, 8, 8, 4))
+        toolbar = ttk.Frame(palette_box.body, style="Panel.TFrame", padding=(0, 1, 0, 2))
         toolbar.pack(fill=tk.X)
-        ttk.Label(toolbar, text="格式").pack(side=tk.LEFT)
+        ttk.Label(toolbar, text="格式", style="Panel.TLabel").pack(side=tk.LEFT)
         self.copy_format_combo = ttk.Combobox(
             toolbar,
             textvariable=self.copy_format,
             values=list(COPY_FORMATS.keys()),
             state="readonly",
-            width=9,
+            width=10,
+            font=FONT_UI,
         )
-        self.copy_format_combo.pack(side=tk.LEFT, padx=(8, 12))
+        self.copy_format_combo.pack(side=tk.LEFT, padx=(8, 10))
         self.copy_format_combo.bind("<<ComboboxSelected>>", lambda event: self.refresh_palette())
-        ttk.Button(toolbar, text="复制色板", command=self.copy_palette).pack(side=tk.LEFT)
-        ttk.Button(toolbar, text="清空", command=self.clear_palette).pack(side=tk.LEFT, padx=(8, 0))
+        RoundedButton(toolbar, text="复制色板", variant="primary", command=self.copy_palette, min_width=86).pack(side=tk.LEFT)
 
-        self.palette_frame = ttk.Frame(palette_box, padding=(8, 4, 8, 8))
-        self.palette_frame.pack(fill=tk.BOTH, expand=True)
+        self.palette_frame = ttk.Frame(toolbar, style="Panel.TFrame")
+        self.palette_frame.pack(side=tk.LEFT, fill=tk.X, expand=True, padx=(12, 0))
 
-    def build_color_structure_section(self):
-        structure = ttk.LabelFrame(self.frame, text="色彩结构")
-        structure.pack(fill=tk.X, pady=(0, 10))
+    def build_color_structure_section(self, parent):
+        structure = RoundedPanel(parent, "色彩结构", min_height=170)
+        structure.pack(fill=tk.X, pady=(0, 8))
 
-        self.dominant_frame = ttk.Frame(structure, padding=(8, 8, 8, 4))
+        self.dominant_frame = ttk.Frame(structure.body, style="Panel.TFrame", padding=(0, 4, 0, 4))
         self.dominant_frame.pack(fill=tk.X)
-        self.auxiliary_frame = ttk.Frame(structure, padding=(8, 4, 8, 4))
+        self.auxiliary_frame = ttk.Frame(structure.body, style="Panel.TFrame", padding=(0, 4, 0, 4))
         self.auxiliary_frame.pack(fill=tk.X)
-        self.accent_frame = ttk.Frame(structure, padding=(8, 4, 8, 8))
+        self.accent_frame = ttk.Frame(structure.body, style="Panel.TFrame", padding=(0, 4, 0, 2))
         self.accent_frame.pack(fill=tk.X)
 
-    def build_preview_section(self):
-        preview_box = ttk.LabelFrame(self.frame, text="预览图片")
-        preview_box.pack(fill=tk.X, pady=(0, 10))
+    def build_preview_section(self, parent):
+        preview_box = RoundedPanel(parent, "预览图片", min_height=120)
+        preview_box.pack(fill=tk.X, pady=(0, 8))
 
-        self.preview_label = ttk.Label(preview_box)
-        self.preview_label.pack(fill=tk.X, padx=8, pady=8)
+        self.preview_label = ttk.Label(preview_box.body, style="Panel.TLabel")
+        self.preview_label.pack(anchor="center", pady=(6, 6))
+        self.preview_label.bind("<Configure>", lambda event: self.refresh_preview())
 
-    def build_analysis_section(self):
-        analysis = ttk.LabelFrame(self.frame, text="明度结构")
+    def build_analysis_section(self, parent):
+        analysis = RoundedPanel(parent, "明度结构", min_height=260)
         analysis.pack(fill=tk.X)
 
-        self.value_canvas = tk.Canvas(analysis, height=220, bg="#202020", highlightthickness=0)
-        self.value_canvas.pack(fill=tk.X, padx=8, pady=8)
+        self.value_canvas = tk.Canvas(analysis.body, height=210, bg=THEME["panel"], highlightthickness=0)
+        self.value_canvas.pack(fill=tk.X, pady=(2, 2))
+        self.value_canvas.pack_propagate(False)
         self.value_canvas.bind("<Configure>", lambda event: (self.refresh_preview(), self.refresh_analysis()))
 
     def set_status(self, message, is_error=False):
         self.status_var.set(message)
-        self.status_label.config(foreground="firebrick" if is_error else "gray")
+        self.status_is_error = is_error
+        self.redraw_header()
 
-    def update_ui(self, color, add_palette=True):
+    def hide_to_pet(self):
+        self.root.withdraw()
+        self.pet.show()
+
+    def show_main_panel(self):
+        self.pet.hide()
+        self.root.deiconify()
+        self.root.lift()
+        self.root.attributes("-topmost", True)
+
+    def update_ui(self, color):
         self.update_current_display(color)
-
-        if add_palette:
-            self.add_to_palette(color)
-        else:
-            self.refresh_analysis()
+        self.refresh_analysis()
 
     def update_current_display(self, color):
         self.current_color = color
         if hasattr(self, "palette_frame"):
             self.refresh_palette()
 
-    def add_to_palette(self, color):
-        self.palette = [item for item in self.palette if item != color]
-        self.palette.insert(0, color)
-        self.palette = self.palette[:8]
+    def select_color(self, color):
         self.update_current_display(color)
-        self.set_status(f"已加入色板：{COPY_FORMATS[self.copy_format.get()](color)}")
+        self.set_status(f"当前颜色：{COPY_FORMATS[self.copy_format.get()](color)}")
 
     def refresh_palette(self):
         for child in self.palette_frame.winfo_children():
@@ -737,30 +1219,27 @@ class RGBApp:
         self.palette_frame.columnconfigure(0, weight=1)
 
     def render_palette_item(self, parent, color, row_index, column, is_current=False):
-        frame = ttk.Frame(parent)
-        frame.grid(row=row_index, column=column, sticky="ew", padx=(0, 8), pady=(3, 8 if is_current else 3))
-        value_column = 2 if is_current else 1
+        frame = ttk.Frame(parent, style="Panel.TFrame")
+        frame.grid(row=row_index, column=column, sticky="ew", padx=(0, 8), pady=0)
+        value_column = 1
         frame.columnconfigure(value_column, weight=1)
-
-        if is_current:
-            ttk.Label(frame, text="当前颜色").grid(row=0, column=0, padx=(0, 8), sticky="w")
 
         swatch = tk.Canvas(
             frame,
             width=34,
-            height=24,
+            height=26,
             bg=color.hex_text,
-            highlightthickness=2,
-            highlightbackground="#D8D8D8",
-            highlightcolor="#D8D8D8",
+            highlightthickness=3,
+            highlightbackground=THEME["swatch_border"],
+            highlightcolor=THEME["swatch_border"],
             cursor="hand2",
         )
-        swatch.grid(row=0, column=1 if is_current else 0, padx=(0, 6))
+        swatch.grid(row=0, column=0, padx=(0, 8))
         command = self.copy_color if is_current else self.update_current_display
         swatch.bind("<Button-1>", lambda event, item=color, action=command: action(item))
 
         text = COPY_FORMATS[self.copy_format.get()](color)
-        label = ttk.Label(frame, text=text, font=("Consolas", 9), cursor="hand2")
+        label = ttk.Label(frame, text=text, style="Panel.TLabel", font=FONT_MONO, cursor="hand2")
         label.grid(row=0, column=value_column, sticky="w")
         label.bind("<Button-1>", lambda event, item=color, action=command: action(item))
         self.bind_color_hover(swatch, label)
@@ -786,9 +1265,9 @@ class RGBApp:
         if stats:
             title_text = f"{title}  占比 0-{self.format_percent(max_percent)}"
 
-        ttk.Label(parent, text=title_text, foreground="gray").grid(row=0, column=0, columnspan=4, sticky="w", pady=(0, 4))
+        ttk.Label(parent, text=title_text, style="Panel.TLabel", foreground=THEME["muted"], font=FONT_SUBTITLE).grid(row=0, column=0, columnspan=4, sticky="w", pady=(1, 5))
         if not stats:
-            ttk.Label(parent, text="暂无数据", foreground="gray").grid(row=1, column=0, sticky="w")
+            ttk.Label(parent, text="暂无数据", style="Panel.TLabel", foreground=THEME["muted"], font=FONT_SUBTITLE).grid(row=1, column=0, sticky="w")
             return
 
         for idx, stat in enumerate(stats):
@@ -796,36 +1275,36 @@ class RGBApp:
             swatch = tk.Canvas(
                 parent,
                 width=34,
-                height=22,
+                height=24,
                 bg=stat.color.hex_text,
-                highlightthickness=2,
-                highlightbackground="#D8D8D8",
-                highlightcolor="#D8D8D8",
+                highlightthickness=3,
+                highlightbackground=THEME["swatch_border"],
+                highlightcolor=THEME["swatch_border"],
                 cursor="hand2",
             )
-            swatch.grid(row=row_idx, column=0, padx=(0, 6), pady=3, sticky="w")
-            swatch.bind("<Button-1>", lambda event, item=stat.color: self.add_to_palette(item))
+            swatch.grid(row=row_idx, column=0, padx=(0, 8), pady=3, sticky="w")
+            swatch.bind("<Button-1>", lambda event, item=stat.color: self.select_color(item))
 
-            label = ttk.Label(parent, text=stat.color.hex_text, font=("Consolas", 9), cursor="hand2")
+            label = ttk.Label(parent, text=stat.color.hex_text, style="Panel.TLabel", font=FONT_MONO, cursor="hand2")
             label.grid(row=row_idx, column=1, sticky="w", padx=(0, 8))
-            label.bind("<Button-1>", lambda event, item=stat.color: self.add_to_palette(item))
+            label.bind("<Button-1>", lambda event, item=stat.color: self.select_color(item))
             self.bind_color_hover(swatch, label)
 
-            bar = tk.Canvas(parent, height=16, bg=self.root.cget("bg"), highlightthickness=0)
+            bar = tk.Canvas(parent, height=16, bg=THEME["panel"], highlightthickness=0)
             bar.grid(row=row_idx, column=2, sticky="ew", padx=(0, 8))
             bar.bind("<Configure>", lambda event, item=stat, max_value=max_percent: self.draw_percent_bar(event.widget, item, max_value))
 
-            percent_label = ttk.Label(parent, text=self.format_percent(stat.percent), font=("Consolas", 9))
+            percent_label = ttk.Label(parent, text=self.format_percent(stat.percent), style="Panel.TLabel", font=FONT_MONO)
             percent_label.grid(row=row_idx, column=3, sticky="e")
 
         parent.columnconfigure(2, weight=1)
 
     def bind_color_hover(self, swatch, label):
         def set_hover(_event):
-            swatch.config(highlightbackground="#2D8CFF", highlightcolor="#2D8CFF")
+            swatch.config(highlightbackground=THEME["accent"], highlightcolor=THEME["accent"])
 
         def clear_hover(_event):
-            swatch.config(highlightbackground="#D8D8D8", highlightcolor="#D8D8D8")
+            swatch.config(highlightbackground=THEME["swatch_border"], highlightcolor=THEME["swatch_border"])
 
         for widget in (swatch, label):
             widget.bind("<Enter>", set_hover)
@@ -840,13 +1319,8 @@ class RGBApp:
 
         ratio = stat.percent / max_percent
         bar_width = max(1, width * ratio)
-        canvas.create_rectangle(0, 2, width, height - 2, fill="", outline="#D8D8D8")
-        canvas.create_rectangle(0, 2, bar_width, height - 2, fill=stat.color.hex_text, outline="")
-
-    def clear_palette(self):
-        self.palette = []
-        self.refresh_palette()
-        self.set_status("色板已清空")
+        canvas.create_rectangle(1, 5, bar_width + 1, height - 3, fill="#8A7D70", outline="")
+        canvas.create_rectangle(0, 4, bar_width, height - 4, fill=stat.color.hex_text, outline="")
 
     def copy_to_clipboard(self, value):
         self.root.clipboard_clear()
@@ -868,7 +1342,7 @@ class RGBApp:
             return
 
         if image is None:
-            self.set_status("剪贴板中没有图片，请先截图再粘贴。", is_error=True)
+            self.set_status("剪贴板中没有图片，请先复制图片后再粘贴。", is_error=True)
             return
 
         if not isinstance(image, Image.Image):
@@ -898,7 +1372,7 @@ class RGBApp:
 
     def apply_image_analysis(self, image, source_name):
         colors = image_to_colors(image)
-        dominant_palette, auxiliary_palette, accent_palette = extract_color_structure(colors, image=image)
+        dominant_palette, auxiliary_palette, accent_palette = extract_color_structure(colors)
         if not dominant_palette:
             self.set_status("没有可分析的像素。", is_error=True)
             return
@@ -907,7 +1381,7 @@ class RGBApp:
         self.auxiliary_palette = auxiliary_palette
         self.accent_palette = accent_palette
         self.analysis_source = colors
-        self.update_ui(self.dominant_palette[0].color, add_palette=False)
+        self.update_ui(self.dominant_palette[0].color)
         self.refresh_color_structure()
         self.refresh_analysis()
         self.update_preview(image, source_name)
@@ -922,26 +1396,32 @@ class RGBApp:
         if not self.preview_source_image or not hasattr(self, "value_canvas"):
             return
 
-        canvas_width = max(self.value_canvas.winfo_width(), 440)
-        target_width = max(1, canvas_width - 56)
+        available_width = max(self.preview_label.master.winfo_width(), self.value_canvas.winfo_width(), 1)
         source_width, source_height = self.preview_source_image.size
-        target_height = max(1, round(source_height * target_width / source_width))
+        max_height = 300
+        scale = min(available_width / source_width, max_height / source_height)
+        target_width = max(1, round(source_width * scale))
+        target_height = max(1, round(source_height * scale))
         preview = self.preview_source_image.resize((target_width, target_height), Image.Resampling.LANCZOS)
+        preview = round_image_corners(preview, 18)
         self.preview_image = ImageTk.PhotoImage(preview)
         self.preview_label.config(image=self.preview_image, text=self.preview_source_name, compound=tk.TOP)
 
     def refresh_analysis(self):
-        source = self.analysis_source or self.palette
+        source = self.analysis_source or [self.current_color]
         if not hasattr(self, "value_canvas"):
             return
 
         canvas = self.value_canvas
         canvas.delete("all")
-        width = max(canvas.winfo_width(), 440)
+        width = max(canvas.winfo_width(), 1)
         height = max(canvas.winfo_height(), 220)
+        chart_bg = make_rounded_image(width, height, 20, THEME["chart"], THEME["panel"], outline=THEME["chart_line"])
+        self.analysis_bg_image = ImageTk.PhotoImage(chart_bg)
+        canvas.create_image(0, 0, image=self.analysis_bg_image, anchor="nw")
         margin_x = 28
-        top = 18
-        step_h = 34
+        top = 16
+        step_h = 32
         gap = 4
         usable_w = width - margin_x * 2
         step_w = usable_w / 11
@@ -953,18 +1433,18 @@ class RGBApp:
             x2 = margin_x + (value + 1) * step_w - gap
             canvas.create_rectangle(x1, top, x2, top + step_h, fill=color, outline="")
             label_color = "white" if value < 5 else "black"
-            canvas.create_text((x1 + x2) / 2, top + step_h / 2, text=str(value), fill=label_color, font=("Consolas", 10, "bold"))
+            canvas.create_text((x1 + x2) / 2, top + step_h / 2, text=str(value), fill=label_color, font=FONT_MONO)
 
         bins = value_distribution(source)
         total = sum(bins)
-        chart_top = top + step_h + 34
-        chart_bottom = height - 30
+        chart_top = top + step_h + 30
+        chart_bottom = height - 28
         chart_h = max(60, chart_bottom - chart_top)
         max_count = max(bins) if bins else 0
 
-        canvas.create_line(margin_x, chart_bottom, width - margin_x, chart_bottom, fill="#777777")
+        canvas.create_line(margin_x, chart_bottom, width - margin_x, chart_bottom, fill=THEME["chart_line"])
         if not total:
-            canvas.create_text(width / 2, chart_top + chart_h / 2, text="暂无明度数据", fill="#CCCCCC", font=("Microsoft YaHei", 11))
+            canvas.create_text(width / 2, chart_top + chart_h / 2, text="暂无明度数据", fill="#CCCCCC", font=FONT_UI)
             return
 
         for value, count in enumerate(bins):
@@ -979,10 +1459,12 @@ class RGBApp:
             canvas.create_rectangle(x1, y1, x2, chart_bottom, fill=fill, outline=outline)
             percent = count / total * 100
             if percent >= 1:
-                canvas.create_text((x1 + x2) / 2, y1 - 9, text=f"{percent:.0f}%", fill="#DDDDDD", font=("Consolas", 8))
-            canvas.create_text((x1 + x2) / 2, chart_bottom + 14, text=str(value), fill="#BBBBBB", font=("Consolas", 9))
+                canvas.create_text((x1 + x2) / 2, y1 - 9, text=f"{percent:.0f}%", fill="#DDDDDD", font=FONT_MONO_SMALL)
+            canvas.create_text((x1 + x2) / 2, chart_bottom + 14, text=str(value), fill="#BBBBBB", font=FONT_MONO_SMALL)
 
     def close(self):
+        if hasattr(self, "pet"):
+            self.pet.window.destroy()
         self.root.destroy()
 
 
@@ -991,6 +1473,3 @@ if __name__ == "__main__":
     root = tk.Tk()
     app = RGBApp(root)
     root.mainloop()
-
-
-

@@ -1,6 +1,6 @@
 # OtherTools
 
-独立小工具集合。目前包含 Windows 图片色彩分析工具 `colortool.py`。
+独立小工具集合。目前包含 Windows 图片色彩分析工具 `colortool.py`，已打包产物位于 `release/Chromie.exe`。
 
 ## 功能
 
@@ -8,34 +8,67 @@
 - 按绘画语义区分主色调、辅色调和点缀色。
 - 主色调和辅色调会归并相近颜色，减少重复色。
 - 点缀色只保留小面积且视觉跳出的颜色，允许没有点缀色。
-- 显示色块、Hex 色值、占比条和明度结构。
-- 支持复制当前色值和添加采样色板。
+- 显示色块、Hex 色值、占比条、图片预览和明度结构。
+- 支持复制当前颜色值。
+- 支持收纳为桌面边缘小窗。
 
-## 运行环境
+## 运行源码
+
+要求：
 
 - Windows
 - Python 3.9 或更高版本
 
-## 安装依赖
+安装依赖：
 
 ```powershell
 python -m pip install -r requirements.txt
 ```
 
-## 启动
+启动：
 
 ```powershell
 python colortool.py
 ```
 
-如果启动时提示缺少依赖，请先运行安装命令。
+## 打包
 
-## 打包建议
-
-建议在干净虚拟环境中只安装 `requirements.txt` 和打包工具，避免把无关依赖打入 exe。
-
-PyInstaller 示例：
+建议使用干净虚拟环境，避免把旧依赖打进 exe。
 
 ```powershell
-pyinstaller --onefile --windowed --name colortool colortool.py
+python -m venv .build-venv
+.build-venv\Scripts\python.exe -m pip install --upgrade pip setuptools wheel Pillow pyinstaller
+.build-venv\Scripts\pyinstaller.exe --noconfirm --clean --onefile --windowed --name Chromie --icon "assets\chromie.ico" --add-data "assets\chromie.png;assets" --distpath release --workpath build --specpath build colortool.py
+```
+
+当前已生成：
+
+```text
+release\Chromie.exe
+```
+
+## 上传到 Git
+
+查看改动：
+
+```powershell
+git status
+```
+
+添加源码、文档、资源和 exe：
+
+```powershell
+git add colortool.py README.md .gitignore assets/chromie.png release/Chromie.exe handoff-2026060419.md
+```
+
+提交：
+
+```powershell
+git commit -m "Package Chromie color tool"
+```
+
+推送到当前分支：
+
+```powershell
+git push origin HEAD
 ```
