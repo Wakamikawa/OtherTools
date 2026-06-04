@@ -785,7 +785,7 @@ class ChromiePet:
         self.window.withdraw()
         self.window.overrideredirect(True)
         self.window.attributes("-topmost", True)
-        self.window.attributes("-alpha", 0.96)
+        self.window.attributes("-alpha", 1.0)
         try:
             self.window.attributes("-transparentcolor", THEME["pet_key"])
         except tk.TclError:
@@ -875,19 +875,13 @@ class ChromiePet:
             y = self.window.winfo_y()
         y = max(0, min(y, screen_h - self.size))
         if self.docked_side == "left":
-            x = 0
-            width = self.visible_edge
-            height = self.size
-            canvas_x = -(self.size - self.visible_edge)
+            x = -(self.size - self.visible_edge)
         else:
             x = screen_w - self.visible_edge
-            width = self.visible_edge
-            height = self.size
-            canvas_x = 0
         if animate:
-            self.animate_to(width, height, x, y, canvas_x)
+            self.animate_to(self.size, self.size, x, y, 0)
         else:
-            self.apply_pet_geometry(width, height, x, y, canvas_x)
+            self.apply_pet_geometry(self.size, self.size, x, y, 0)
 
     def reveal(self, _event=None):
         if self.is_dragging:
@@ -944,7 +938,7 @@ class ChromiePet:
         x = round(x)
         y = round(y)
         canvas_x = round(canvas_x)
-        self.canvas.place_configure(x=canvas_x, y=0)
+        self.canvas.place_configure(x=canvas_x, y=0, width=self.size, height=self.size)
         self.window.geometry(f"{width}x{height}+{x}+{y}")
 
     def smooth_progress(self, progress):
@@ -1106,8 +1100,9 @@ class RGBApp:
         self.header_button_image = ImageTk.PhotoImage(
             make_transparent_pill(84, 38, 18, button_fill, shadow=(172, 156, 139, 80))
         )
-        canvas.create_image(72, 112, image=self.header_button_image, tags=("header_art", "header_button"))
-        canvas.create_text(72, 112, text="收纳", fill=THEME["accent_dark"], font=FONT_UI, tags=("header_art", "header_button"))
+        header_button_x = 65
+        canvas.create_image(header_button_x, 112, image=self.header_button_image, tags=("header_art", "header_button"))
+        canvas.create_text(header_button_x, 112, text="收纳", fill=THEME["accent_dark"], font=FONT_UI, tags=("header_art", "header_button"))
 
     def enter_header_button(self, _event=None):
         if self.header_button_hovered:
@@ -1174,11 +1169,11 @@ class RGBApp:
         self.preview_label.bind("<Configure>", lambda event: self.refresh_preview())
 
     def build_analysis_section(self, parent):
-        analysis = RoundedPanel(parent, "明度结构", min_height=260)
+        analysis = RoundedPanel(parent, "明度结构", min_height=280)
         analysis.pack(fill=tk.X)
 
-        self.value_canvas = tk.Canvas(analysis.body, height=210, bg=THEME["panel"], highlightthickness=0)
-        self.value_canvas.pack(fill=tk.X, pady=(2, 2))
+        self.value_canvas = tk.Canvas(analysis.body, height=230, bg=THEME["panel"], highlightthickness=0)
+        self.value_canvas.pack(fill=tk.X, pady=(2, 6))
         self.value_canvas.pack_propagate(False)
         self.value_canvas.bind("<Configure>", lambda event: (self.refresh_preview(), self.refresh_analysis()))
 
@@ -1403,7 +1398,7 @@ class RGBApp:
         target_width = max(1, round(source_width * scale))
         target_height = max(1, round(source_height * scale))
         preview = self.preview_source_image.resize((target_width, target_height), Image.Resampling.LANCZOS)
-        preview = round_image_corners(preview, 18)
+        preview = round_image_corners(preview, 30)
         self.preview_image = ImageTk.PhotoImage(preview)
         self.preview_label.config(image=self.preview_image, text=self.preview_source_name, compound=tk.TOP)
 
@@ -1415,7 +1410,7 @@ class RGBApp:
         canvas = self.value_canvas
         canvas.delete("all")
         width = max(canvas.winfo_width(), 1)
-        height = max(canvas.winfo_height(), 220)
+        height = max(canvas.winfo_height(), 230)
         chart_bg = make_rounded_image(width, height, 20, THEME["chart"], THEME["panel"], outline=THEME["chart_line"])
         self.analysis_bg_image = ImageTk.PhotoImage(chart_bg)
         canvas.create_image(0, 0, image=self.analysis_bg_image, anchor="nw")
@@ -1438,7 +1433,7 @@ class RGBApp:
         bins = value_distribution(source)
         total = sum(bins)
         chart_top = top + step_h + 30
-        chart_bottom = height - 28
+        chart_bottom = height - 46
         chart_h = max(60, chart_bottom - chart_top)
         max_count = max(bins) if bins else 0
 
@@ -1460,7 +1455,7 @@ class RGBApp:
             percent = count / total * 100
             if percent >= 1:
                 canvas.create_text((x1 + x2) / 2, y1 - 9, text=f"{percent:.0f}%", fill="#DDDDDD", font=FONT_MONO_SMALL)
-            canvas.create_text((x1 + x2) / 2, chart_bottom + 14, text=str(value), fill="#BBBBBB", font=FONT_MONO_SMALL)
+            canvas.create_text((x1 + x2) / 2, chart_bottom + 16, text=str(value), fill="#BBBBBB", font=FONT_MONO_SMALL)
 
     def close(self):
         if hasattr(self, "pet"):
