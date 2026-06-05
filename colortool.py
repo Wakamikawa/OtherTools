@@ -27,9 +27,15 @@ except ImportError as exc:
     sys.exit(1)
 
 try:
-    from tkinterdnd2 import DND_FILES, TkinterDnD
-except ImportError as exc:
-    missing_package = exc.name or "tkinterdnd2"
+    PIL_IMAGE_ERRORS = (OSError, ValueError, Image.DecompressionBombError)
+except AttributeError:
+    PIL_IMAGE_ERRORS = (OSError, ValueError)
+
+DND_FILES = None
+
+
+def show_missing_dependency(exc, fallback_name):
+    missing_package = exc.name or fallback_name
     install_command = f'"{sys.executable}" -m pip install -r requirements.txt'
     messagebox.showerror(
         "缺少依赖",
@@ -39,6 +45,16 @@ except ImportError as exc:
         f"当前 Python：{sys.executable}",
     )
     sys.exit(1)
+
+
+def create_tk_root():
+    global DND_FILES
+    try:
+        from tkinterdnd2 import DND_FILES as dnd_files, TkinterDnD
+    except ImportError as exc:
+        show_missing_dependency(exc, "tkinterdnd2")
+    DND_FILES = dnd_files
+    return TkinterDnD.Tk()
 
 
 @dataclass(frozen=True)
@@ -84,6 +100,10 @@ class ToneFamily:
     hue: float
 
 
+class ImageAnalysisError(ValueError):
+    pass
+
+
 COPY_FORMATS = {
     "Hex": lambda color: color.hex_text,
     "RGB": lambda color: color.rgb_text,
@@ -107,6 +127,9 @@ FONT_MONO_SMALL = ("Cascadia Mono", 8, "bold")
 PREVIEW_EMPTY_HEIGHT = 330
 PREVIEW_MAX_IMAGE_HEIGHT = 300
 PREVIEW_NAME_HEIGHT = 30
+MAX_INPUT_PIXELS = 40_000_000
+MAX_PREVIEW_SOURCE_PIXELS = 2_000_000
+MAX_AVATAR_PIXELS = 4_000_000
 DEFAULT_THEME_NAME = "orange_umber"
 
 THEME_SHARED = {
@@ -317,8 +340,39 @@ def average_color(colors):
     )
 
 
+def image_size(image):
+    try:
+        width, height = image.size
+    except (AttributeError, TypeError) as exc:
+        raise ImageAnalysisError("无法读取图片尺寸。") from exc
+    try:
+        width = int(width)
+        height = int(height)
+    except (TypeError, ValueError) as exc:
+        raise ImageAnalysisError("图片尺寸无效。") from exc
+    if width <= 0 or height <= 0:
+        raise ImageAnalysisError("图片尺寸无效。")
+    return width, height
+
+
+def ensure_image_size_allowed(image, max_pixels=MAX_INPUT_PIXELS):
+    width, height = image_size(image)
+    if width * height > max_pixels:
+        megapixels = max_pixels / 1_000_000
+        raise ImageAnalysisError(f"图片尺寸过大：{width} x {height}，请使用不超过 {megapixels:.0f}MP 的图片。")
+    return width, height
+
+
+def convert_image_safely(image, mode):
+    try:
+        return image.convert(mode)
+    except PIL_IMAGE_ERRORS as exc:
+        raise ImageAnalysisError(f"图片解码失败：{exc}") from exc
+
+
 def image_to_colors(image, max_pixels=60000):
-    rgb_image = image.convert("RGB")
+    ensure_image_size_allowed(image)
+    rgb_image = convert_image_safely(image, "RGB")
     width, height = rgb_image.size
     if width * height > max_pixels:
         scale = (max_pixels / (width * height)) ** 0.5
@@ -326,6 +380,17 @@ def image_to_colors(image, max_pixels=60000):
         rgb_image = rgb_image.resize(new_size, Image.Resampling.BILINEAR)
 
     return [ColorInfo(r, g, b) for r, g, b in rgb_image.getdata()]
+
+
+def make_preview_source_image(image):
+    ensure_image_size_allowed(image)
+    preview = convert_image_safely(image, "RGB")
+    width, height = preview.size
+    if width * height > MAX_PREVIEW_SOURCE_PIXELS:
+        scale = (MAX_PREVIEW_SOURCE_PIXELS / (width * height)) ** 0.5
+        new_size = (max(1, int(width * scale)), max(1, int(height * scale)))
+        preview = preview.resize(new_size, Image.Resampling.LANCZOS)
+    return preview
 
 
 def srgb_channel_to_linear(value):
@@ -907,8 +972,11 @@ def harden_alpha(image, threshold=96):
 def load_chromie_image(size, hard_alpha=False, source_path=None):
     path = Path(source_path) if source_path else CHROMIE_ASSET_PATH
     try:
-        image = Image.open(path).convert("RGBA")
-    except OSError:
+        image = Image.open(path)
+        if source_path:
+            ensure_image_size_allowed(image, max_pixels=MAX_AVATAR_PIXELS)
+        image = convert_image_safely(image, "RGBA")
+    except (OSError, ImageAnalysisError):
         image = Image.open(CHROMIE_ASSET_PATH).convert("RGBA")
     bbox = image.getbbox()
     if bbox:
@@ -1678,8 +1746,11 @@ class RGBApp:
                 if image.width != image.height:
                     self.set_status("头像必须是正方形 PNG。", is_error=True)
                     return
+                if image.width * image.height > MAX_AVATAR_PIXELS:
+                    self.set_status("头像尺寸过大，请使用不超过 4MP 的 PNG。", is_error=True)
+                    return
                 image.verify()
-        except OSError as exc:
+        except PIL_IMAGE_ERRORS as exc:
             self.set_status(f"头像读取失败：{exc}", is_error=True)
             return
 
@@ -2004,15 +2075,21 @@ class RGBApp:
 
         try:
             image = Image.open(path)
-        except OSError as exc:
+        except PIL_IMAGE_ERRORS as exc:
             self.set_status(f"图片打开失败：{exc}", is_error=True)
             return
 
         self.apply_image_analysis(image, path.name)
 
     def apply_image_analysis(self, image, source_name):
-        colors = image_to_colors(image)
-        dominant_palette, auxiliary_palette, accent_palette = extract_color_structure(colors)
+        try:
+            colors = image_to_colors(image)
+            dominant_palette, auxiliary_palette, accent_palette = extract_color_structure(colors)
+            preview_image = make_preview_source_image(image)
+        except ImageAnalysisError as exc:
+            self.set_status(f"图片分析失败：{exc}", is_error=True)
+            return
+
         if not dominant_palette:
             self.set_status("没有可分析的像素。", is_error=True)
             return
@@ -2024,11 +2101,11 @@ class RGBApp:
         self.update_ui(self.dominant_palette[0].color)
         self.refresh_color_structure()
         self.refresh_analysis()
-        self.update_preview(image, source_name)
+        self.update_preview(preview_image, source_name)
         self.set_status(f"已分析：{source_name}")
 
     def update_preview(self, image, source_name):
-        self.preview_source_image = image.convert("RGB")
+        self.preview_source_image = image
         self.preview_source_name = source_name
         self.refresh_preview()
 
@@ -2193,6 +2270,6 @@ class RGBApp:
 
 if __name__ == "__main__":
     enable_dpi_awareness()
-    root = TkinterDnD.Tk()
+    root = create_tk_root()
     app = RGBApp(root)
     root.mainloop()
