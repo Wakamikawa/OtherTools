@@ -1304,6 +1304,7 @@ class ChromiePet:
 class RGBApp:
     def __init__(self, root):
         self.root = root
+        self.is_closing = False
         self.root.title(APP_TITLE)
         self.root.geometry("560x720")
         self.root.minsize(500, 520)
@@ -2263,9 +2264,40 @@ class RGBApp:
             canvas.create_text((x1 + x2) / 2, chart_bottom + 16, text=str(value), fill="#BBBBBB", font=FONT_MONO_SMALL)
 
     def close(self):
+        if self.is_closing:
+            return
+        self.is_closing = True
+
+        try:
+            self.root.unbind_all("<MouseWheel>")
+            self.root.unbind_all("<Control-v>")
+            self.root.unbind_all("<Control-V>")
+        except tk.TclError:
+            pass
+
         if hasattr(self, "pet"):
-            self.pet.window.destroy()
-        self.root.destroy()
+            self.pet.cancel_hide_timer()
+            self.pet.cancel_animation()
+            try:
+                self.pet.window.destroy()
+            except tk.TclError:
+                pass
+
+        try:
+            for window in self.root.winfo_children():
+                if isinstance(window, tk.Toplevel):
+                    window.destroy()
+        except tk.TclError:
+            pass
+
+        try:
+            self.root.quit()
+        except tk.TclError:
+            pass
+        try:
+            self.root.destroy()
+        except tk.TclError:
+            pass
 
 
 if __name__ == "__main__":
