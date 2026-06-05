@@ -637,11 +637,16 @@ def make_transparent_pill(width, height, radius, fill, shadow=None, scale=3):
     return canvas.resize((width, height), Image.Resampling.LANCZOS)
 
 
-def round_image_corners(image, radius):
+def round_image_corners(image, radius, scale=3):
     rounded = image.convert("RGBA")
-    mask = Image.new("L", rounded.size, 0)
+    width, height = rounded.size
+    scale = max(1, int(scale))
+    mask = Image.new("L", (width * scale, height * scale), 0)
     draw = ImageDraw.Draw(mask)
-    draw.rounded_rectangle((0, 0, rounded.width, rounded.height), radius=radius, fill=255)
+    rect = (0, 0, width * scale - 1, height * scale - 1)
+    draw.rounded_rectangle(rect, radius=radius * scale, fill=255)
+    if scale > 1:
+        mask = mask.resize((width, height), Image.Resampling.LANCZOS)
     rounded.putalpha(mask)
     return rounded
 
@@ -1391,7 +1396,11 @@ class RGBApp:
         if not self.preview_source_image or not hasattr(self, "value_canvas"):
             return
 
-        available_width = max(self.preview_label.master.winfo_width(), self.value_canvas.winfo_width(), 1)
+        body_width = self.preview_label.master.winfo_width()
+        if body_width <= 1:
+            return
+
+        available_width = max(1, body_width - 20)
         source_width, source_height = self.preview_source_image.size
         max_height = 300
         scale = min(available_width / source_width, max_height / source_height)

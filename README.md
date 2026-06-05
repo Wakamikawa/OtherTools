@@ -46,29 +46,3 @@ python -m venv .build-venv
 ```text
 release\Chromie.exe
 ```
-
-## 上传到 Git
-
-查看改动：
-
-```powershell
-git status
-```
-
-添加源码、文档、资源和 exe：
-
-```powershell
-git add colortool.py README.md .gitignore assets/chromie.png release/Chromie.exe handoff-2026060419.md
-```
-
-提交：
-
-```powershell
-git commit -m "Package Chromie color tool"
-```
-
-推送到当前分支：
-
-```powershell
-git push origin HEAD
-```
