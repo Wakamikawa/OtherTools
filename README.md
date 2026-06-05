@@ -2,15 +2,30 @@
 
 独立小工具集合。目前包含 Windows 图片色彩分析工具 `colortool.py`，已打包产物位于 `release/Chromie.exe`。
 
-## 功能
+## Chromie 功能
 
-- 导入或粘贴图片，自动提取图片色彩结构。
-- 按绘画语义区分主色调、辅色调和点缀色。
-- 主色调和辅色调会归并相近颜色，减少重复色。
-- 点缀色只保留小面积且视觉跳出的颜色，允许没有点缀色。
-- 显示色块、Hex 色值、占比条、图片预览和明度结构。
-- 支持复制当前颜色值。
-- 支持收纳为桌面边缘小窗。
+- 支持点击、拖拽或 `Ctrl+V` 粘贴图片进行分析。
+- 自动提取图片色彩结构，区分主色调、辅色调和点缀色。
+- 显示当前采样色、色彩结构、图片预览和明度结构。
+- 点击采样色板可按当前格式复制颜色值。
+- 支持 Hex、RGB、HSV、RGB 0-1 等复制格式。
+- 支持收纳为桌面边缘悬浮球。
+- 支持设置自定义标题。
+- 支持上传正方形透明 PNG 替换标题头像和悬浮球头像。
+- 支持 8 套低饱和配色主题：赤、橙、黄、绿、青、蓝、紫、灰。
+
+## 配置位置
+
+用户设置保存在 Windows 用户配置目录：
+
+```text
+%APPDATA%\Chromie
+```
+
+当前包含：
+
+- `config.json`：标题、配色等设置。
+- `avatar.png`：用户上传的自定义头像。
 
 ## 运行源码
 
@@ -37,7 +52,8 @@ python colortool.py
 
 ```powershell
 python -m venv .build-venv
-.build-venv\Scripts\python.exe -m pip install --upgrade pip setuptools wheel Pillow pyinstaller
+.build-venv\Scripts\python.exe -m pip install --upgrade pip setuptools wheel
+.build-venv\Scripts\python.exe -m pip install -r requirements.txt pyinstaller
 .build-venv\Scripts\pyinstaller.exe --noconfirm --clean --onefile --windowed --name Chromie --icon "assets\chromie.ico" --add-data "assets\chromie.png;assets" --distpath release --workpath build --specpath build colortool.py
 ```
 
