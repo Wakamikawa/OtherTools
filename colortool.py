@@ -127,6 +127,9 @@ FONT_MONO_SMALL = ("Cascadia Mono", 8, "bold")
 PREVIEW_EMPTY_HEIGHT = 330
 PREVIEW_MAX_IMAGE_HEIGHT = 300
 PREVIEW_NAME_HEIGHT = 30
+VALUE_CHART_HEIGHT = 230
+VALUE_GRAYSCALE_PREVIEW_MAX_HEIGHT = PREVIEW_MAX_IMAGE_HEIGHT
+VALUE_GRAYSCALE_PREVIEW_GAP = 18
 MAX_INPUT_PIXELS = 40_000_000
 MAX_PREVIEW_SOURCE_PIXELS = 2_000_000
 MAX_AVATAR_PIXELS = 4_000_000
@@ -391,6 +394,10 @@ def make_preview_source_image(image):
         new_size = (max(1, int(width * scale)), max(1, int(height * scale)))
         preview = preview.resize(new_size, Image.Resampling.LANCZOS)
     return preview
+
+
+def make_grayscale_preview_source_image(image):
+    return image.convert("L").convert("RGB")
 
 
 def srgb_channel_to_linear(value):
@@ -1341,6 +1348,8 @@ class RGBApp:
         self.preview_drop_hovered = False
         self.analysis_bg_image = None
         self.preview_source_image = None
+        self.value_preview_source_image = None
+        self.value_preview_image = None
         self.preview_source_name = ""
         self.status_is_error = False
         self.pet = ChromiePet(self)
@@ -1853,7 +1862,7 @@ class RGBApp:
         analysis = RoundedPanel(parent, "明度结构", min_height=280)
         analysis.pack(fill=tk.X)
 
-        self.value_canvas = tk.Canvas(analysis.body, height=230, bg=THEME["panel"], highlightthickness=0)
+        self.value_canvas = tk.Canvas(analysis.body, height=VALUE_CHART_HEIGHT, bg=THEME["panel"], highlightthickness=0)
         self.value_canvas.pack(fill=tk.X, pady=(2, 6))
         self.value_canvas.pack_propagate(False)
         self.value_canvas.bind("<Configure>", lambda event: (self.refresh_preview(), self.refresh_analysis()))
@@ -2087,6 +2096,7 @@ class RGBApp:
             colors = image_to_colors(image)
             dominant_palette, auxiliary_palette, accent_palette = extract_color_structure(colors)
             preview_image = make_preview_source_image(image)
+            value_preview_image = make_grayscale_preview_source_image(preview_image)
         except ImageAnalysisError as exc:
             self.set_status(f"图片分析失败：{exc}", is_error=True)
             return
@@ -2099,6 +2109,7 @@ class RGBApp:
         self.auxiliary_palette = auxiliary_palette
         self.accent_palette = accent_palette
         self.analysis_source = colors
+        self.value_preview_source_image = value_preview_image
         self.update_ui(self.dominant_palette[0].color)
         self.refresh_color_structure()
         self.refresh_analysis()
@@ -2216,12 +2227,43 @@ class RGBApp:
         canvas = self.value_canvas
         canvas.delete("all")
         width = max(canvas.winfo_width(), 1)
-        height = max(canvas.winfo_height(), 230)
-        chart_bg = make_rounded_image(width, height, 20, THEME["chart"], THEME["panel"], outline=THEME["chart_line"])
+        height = max(canvas.winfo_height(), VALUE_CHART_HEIGHT)
+        preview = self.value_preview_source_image
+        preview_target = None
+        preview_section_height = 0
+        if preview:
+            available_width = max(1, width - 24)
+            source_width, source_height = preview.size
+            width_scale = available_width / source_width
+            target_height = max(1, round(source_height * width_scale))
+            if target_height > VALUE_GRAYSCALE_PREVIEW_MAX_HEIGHT:
+                target_height = VALUE_GRAYSCALE_PREVIEW_MAX_HEIGHT
+                scale = target_height / source_height
+            else:
+                scale = width_scale
+            target_width = max(1, round(source_width * scale))
+            preview_target = (target_width, target_height)
+            preview_section_height = target_height + VALUE_GRAYSCALE_PREVIEW_GAP
+        chart_y = preview_section_height
+
+        desired_height = VALUE_CHART_HEIGHT + preview_section_height
+        if abs(height - desired_height) > 1:
+            canvas.configure(height=desired_height)
+            return
+
+        chart_bg = make_rounded_image(width, VALUE_CHART_HEIGHT, 20, THEME["chart"], THEME["panel"], outline=THEME["chart_line"])
         self.analysis_bg_image = ImageTk.PhotoImage(chart_bg)
-        canvas.create_image(0, 0, image=self.analysis_bg_image, anchor="nw")
+        canvas.create_image(0, chart_y, image=self.analysis_bg_image, anchor="nw")
+
+        if preview and preview_target:
+            target_width, target_height = preview_target
+            grayscale_preview = preview.resize((target_width, target_height), Image.Resampling.LANCZOS)
+            grayscale_preview = round_image_corners(grayscale_preview, 18)
+            self.value_preview_image = ImageTk.PhotoImage(grayscale_preview)
+            canvas.create_image(width / 2, 0, image=self.value_preview_image, anchor="n")
+
         margin_x = 28
-        top = 16
+        top = chart_y + 16
         step_h = 32
         gap = 4
         usable_w = width - margin_x * 2
@@ -2239,7 +2281,7 @@ class RGBApp:
         bins = value_distribution(source)
         total = sum(bins)
         chart_top = top + step_h + 30
-        chart_bottom = height - 46
+        chart_bottom = chart_y + VALUE_CHART_HEIGHT - 46
         chart_h = max(60, chart_bottom - chart_top)
         max_count = max(bins) if bins else 0
 
